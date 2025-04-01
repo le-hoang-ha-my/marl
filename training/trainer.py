@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from main import save_training_state
 import os
+from utils.training_utils import save_training_state
 
 class MultiAgentTrainer:
     """

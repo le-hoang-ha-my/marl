@@ -7,11 +7,10 @@ import torch
 import numpy as np
 import random
 import argparse
-
 from environment import MultiAgentGridWorld
 from agents import PPOAgent
 from training import MultiAgentTrainer
-from utils import visualize_episode
+from utils import visualize_episode, load_training_state
 from config import (
     RANDOM_SEED, ENV_CONFIG, AGENT_CONFIG, 
     TRAIN_CONFIG, EVAL_CONFIG, VIZ_CONFIG
@@ -114,28 +113,6 @@ def evaluate(env, agents, auto_close=True):
         final_data = episode_data[-1]
         print("Final resources:", final_data['agent_resources'])
         print("Total steps:", len(episode_data) - 1)  # Subtract initial state
-        
-def save_training_state(episode, trainer, save_dir):
-    """Save training state to resume later"""
-    state_path = os.path.join(save_dir, "training_state.pt")
-    state = {
-        'episode': episode,
-        'episode_rewards': trainer.episode_rewards,
-        'resource_counts': trainer.resource_counts,
-        'cooperation_counts': trainer.cooperation_counts,
-        'theft_counts': trainer.theft_counts,
-        'step_counter': trainer.step_counter
-    }
-    torch.save(state, state_path)
-    print(f"Training state saved at episode {episode}")
-
-def load_training_state(save_dir):
-    """Load training state to resume training"""
-    state_path = os.path.join(save_dir, "training_state.pt")
-    if os.path.exists(state_path):
-        state = torch.load(state_path)
-        return state
-    return None
 
 def main():
     parser = argparse.ArgumentParser(description='Multi-Agent Reinforcement Learning')
