@@ -138,7 +138,6 @@ def load_training_state(save_dir):
     return None
 
 def main():
-    """Main function to run the project."""
     parser = argparse.ArgumentParser(description='Multi-Agent Reinforcement Learning')
     parser.add_argument('--train', action='store_true', help='Train the agents')
     parser.add_argument('--evaluate', action='store_true', help='Evaluate the agents')
@@ -149,10 +148,8 @@ def main():
     
     args = parser.parse_args()
     
-    # Set random seeds
     set_random_seeds(RANDOM_SEED)
     
-    # Create environment and agents
     env = create_environment()
     agents = create_agents(env)
     
@@ -177,7 +174,6 @@ def main():
     if args.episodes:
         TRAIN_CONFIG['max_episodes'] = args.episodes
     
-    # Train or evaluate based on arguments
     if args.train:
         print(f"Starting training from episode {start_episode}...")
         trainer = train(env, agents, start_episode)

@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from main import save_training_state
 import os
 
 class MultiAgentTrainer:
@@ -44,15 +45,18 @@ class MultiAgentTrainer:
         self.cooperation_counts = [0] * self.num_agents
         self.theft_counts = [0] * self.num_agents
         
-    def train(self):
+    def train(self, start_episode=1):
         """
         Main training loop.
         
+        Args:
+            start_episode: Episode to start from (for resuming training)
+            
         Returns:
             episode_rewards: List of rewards for each agent across episodes
             resource_counts: List of resources collected by each agent across episodes
         """
-        for episode in range(1, self.max_episodes + 1):
+        for episode in range(start_episode, self.max_episodes + 1):
             observations, _ = self.env.reset()
             episode_rewards = np.zeros(self.num_agents)
             
@@ -111,18 +115,12 @@ class MultiAgentTrainer:
                 for i, agent in enumerate(self.agents):
                     save_path = os.path.join(self.save_dir, f"agent_{i}_episode_{episode}.pth")
                     agent.save(save_path)
+                # Save training state
+                save_training_state(episode, self, self.save_dir)
             
             # Evaluation
             if episode % self.eval_interval == 0:
                 self.evaluate(5, render=False)
-            if episode % self.save_interval == 0:
-                for i, agent in enumerate(self.agents):
-                    save_path = os.path.join(self.save_dir, f"agent_{i}_episode_{episode}.pth")
-                    agent.save(save_path)
-                    
-                # Save training state
-                from main import save_training_state
-                save_training_state(episode, self, self.save_dir)
                 
         return self.episode_rewards, self.resource_counts
     
