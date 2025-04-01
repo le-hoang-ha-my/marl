@@ -115,6 +115,14 @@ class MultiAgentTrainer:
             # Evaluation
             if episode % self.eval_interval == 0:
                 self.evaluate(5, render=False)
+            if episode % self.save_interval == 0:
+                for i, agent in enumerate(self.agents):
+                    save_path = os.path.join(self.save_dir, f"agent_{i}_episode_{episode}.pth")
+                    agent.save(save_path)
+                    
+                # Save training state
+                from main import save_training_state
+                save_training_state(episode, self, self.save_dir)
                 
         return self.episode_rewards, self.resource_counts
     

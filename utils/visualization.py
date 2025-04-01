@@ -55,7 +55,7 @@ def plot_training_history(rewards_history, resource_history, save_dir='figures')
         plt.savefig(os.path.join(save_dir, "learning_curve.png"))
         plt.close()
 
-def visualize_episode(env, agents, save_path=None, max_steps=100):
+def visualize_episode(env, agents, save_path=None, max_steps=100, auto_close = True):
     """
     Run and visualize a full episode with the trained agents.
     
@@ -64,6 +64,7 @@ def visualize_episode(env, agents, save_path=None, max_steps=100):
         agents: List of trained agents
         save_path: Path to save the animation (optional)
         max_steps: Maximum steps per episode
+        auto_close: Automatically close the animation after it's done
     """
     observations, _ = env.reset()
     done = False
@@ -160,6 +161,13 @@ def visualize_episode(env, agents, save_path=None, max_steps=100):
         ani.save(save_path, writer='pillow', fps=2)
     
     plt.tight_layout()
-    plt.show()
+    
+    if auto_close:
+        # Display for 5 seconds then close automatically
+        plt.show(block=False)
+        plt.pause(5)
+        plt.close(fig)
+    else:
+        plt.show()
     
     return episode_data

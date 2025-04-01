@@ -63,7 +63,7 @@ def create_agents(env):
     
     return agents
 
-def train(env, agents):
+def train(env, agents, start_episode=1):
     """Train the agents in the environment."""
     trainer = MultiAgentTrainer(
         env=env,
@@ -77,19 +77,25 @@ def train(env, agents):
         save_dir=TRAIN_CONFIG['save_dir']
     )
     
-    rewards_history, resource_history = trainer.train()
+    if start_episode > 1:
+        state = load_training_state(TRAIN_CONFIG['save_dir'])
+        if state:
+            trainer.episode_rewards = state['episode_rewards']
+            trainer.resource_counts = state['resource_counts']
+            trainer.cooperation_counts = state['cooperation_counts']
+            trainer.theft_counts = state['theft_counts']
+            trainer.step_counter = state['step_counter']
+            print(f"Resumed training from episode {start_episode}")
     
-    # Plot final metrics
+    rewards_history, resource_history = trainer.train(start_episode)
     trainer.plot_metrics(save_fig=True)
     
     return trainer
 
-def evaluate(env, agents):
+def evaluate(env, agents, auto_close=True):
     """Evaluate the trained agents."""
-    # Create directories if they don't exist
     os.makedirs(EVAL_CONFIG['video_dir'], exist_ok=True)
     
-    # Run evaluation episodes
     for episode in range(EVAL_CONFIG['num_episodes']):
         print(f"\nEvaluation Episode {episode+1}/{EVAL_CONFIG['num_episodes']}")
         
@@ -101,13 +107,35 @@ def evaluate(env, agents):
             env=env,
             agents=agents,
             save_path=save_path,
-            max_steps=ENV_CONFIG['max_steps']
+            max_steps=ENV_CONFIG['max_steps'],
+            auto_close=auto_close
         )
         
-        # Print episode summary
         final_data = episode_data[-1]
         print("Final resources:", final_data['agent_resources'])
         print("Total steps:", len(episode_data) - 1)  # Subtract initial state
+        
+def save_training_state(episode, trainer, save_dir):
+    """Save training state to resume later"""
+    state_path = os.path.join(save_dir, "training_state.pt")
+    state = {
+        'episode': episode,
+        'episode_rewards': trainer.episode_rewards,
+        'resource_counts': trainer.resource_counts,
+        'cooperation_counts': trainer.cooperation_counts,
+        'theft_counts': trainer.theft_counts,
+        'step_counter': trainer.step_counter
+    }
+    torch.save(state, state_path)
+    print(f"Training state saved at episode {episode}")
+
+def load_training_state(save_dir):
+    """Load training state to resume training"""
+    state_path = os.path.join(save_dir, "training_state.pt")
+    if os.path.exists(state_path):
+        state = torch.load(state_path)
+        return state
+    return None
 
 def main():
     """Main function to run the project."""
@@ -116,6 +144,8 @@ def main():
     parser.add_argument('--evaluate', action='store_true', help='Evaluate the agents')
     parser.add_argument('--load_dir', type=str, default=None, help='Directory to load trained models')
     parser.add_argument('--episodes', type=int, default=None, help='Number of episodes for training')
+    parser.add_argument('--resume', action='store_true', help='Resume training from last saved state')
+    parser.add_argument('--auto_close', action='store_true', help='Automatically close animations')
     
     args = parser.parse_args()
     
@@ -126,14 +156,20 @@ def main():
     env = create_environment()
     agents = create_agents(env)
     
-    # Load trained models if specified
-    if args.load_dir:
+    start_episode = 1
+    if args.resume or args.load_dir:
+        load_dir = args.load_dir if args.load_dir else TRAIN_CONFIG['save_dir']
+        # Find the latest episode
+        state = load_training_state(load_dir)
+        if state:
+            start_episode = state['episode'] + 1
+            
         for i, agent in enumerate(agents):
             # Find the latest model for each agent
-            model_files = [f for f in os.listdir(args.load_dir) if f.startswith(f"agent_{i}_")]
+            model_files = [f for f in os.listdir(load_dir) if f.startswith(f"agent_{i}_")]
             if model_files:
                 latest_model = sorted(model_files, key=lambda x: int(x.split('_')[-1].split('.')[0]))[-1]
-                model_path = os.path.join(args.load_dir, latest_model)
+                model_path = os.path.join(load_dir, latest_model)
                 print(f"Loading agent {i} model from {model_path}")
                 agent.load(model_path)
     
@@ -143,19 +179,18 @@ def main():
     
     # Train or evaluate based on arguments
     if args.train:
-        print("Starting training...")
-        trainer = train(env, agents)
+        print(f"Starting training from episode {start_episode}...")
+        trainer = train(env, agents, start_episode)
         print("Training completed!")
     
     if args.evaluate:
         print("Starting evaluation...")
-        evaluate(env, agents)
+        evaluate(env, agents, auto_close=args.auto_close)
         print("Evaluation completed!")
     
-    # If no mode specified, run both
     if not args.train and not args.evaluate:
-        print("Starting training and evaluation...")
-        trainer = train(env, agents)
+        print(f"Starting training from episode {start_episode} and evaluation...")
+        trainer = train(env, agents, start_episode)
         evaluate(env, agents)
         print("All tasks completed!")
 

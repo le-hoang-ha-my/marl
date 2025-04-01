@@ -1,0 +1,1426 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+<additional_info>
+
+</additional_info>
+
+</file_summary>
+
+<directory_structure>
+agents/
+  __init__.py
+  networks.py
+  ppo_agent.py
+environment/
+  __init__.py
+  grid_world.py
+training/
+  __init__.py
+  trainer.py
+utils/
+  __init__.py
+  visualization.py
+.gitignore
+config.py
+main.py
+README.md
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="agents/__init__.py">
+from agents.networks import ActorCriticNetwork
+from agents.ppo_agent import PPOAgent
+
+__all__ = ['ActorCriticNetwork', 'PPOAgent']
+</file>
+
+<file path="agents/networks.py">
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.distributions import Categorical
+
+class ActorCriticNetwork(nn.Module):
+    """
+    Neural network architecture that combines actor (policy) and critic (value) functions.
+    Uses shared layers for feature extraction and separate heads for policy and value outputs.
+    """
+    def __init__(self, state_size, action_size, hidden_size=128):
+        super(ActorCriticNetwork, self).__init__()
+        
+        # Shared layers
+        self.fc1 = nn.Linear(state_size, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        
+        # Actor (policy) head
+        self.actor = nn.Linear(hidden_size, action_size)
+        
+        # Critic (value) head
+        self.critic = nn.Linear(hidden_size, 1)
+        
+    def forward(self, x):
+        """
+        Forward pass through the network.
+        
+        Args:
+            x: Input state tensor
+            
+        Returns:
+            policy: Action probability distribution
+            value: Estimated state value
+        """
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        
+        # Actor output (action probabilities)
+        policy = F.softmax(self.actor(x), dim=-1)
+        
+        # Critic output (state value)
+        value = self.critic(x)
+        
+        return policy, value
+    
+    def get_action(self, state, deterministic=False):
+        """
+        Select an action based on the current policy.
+        
+        Args:
+            state: Current state
+            deterministic: If True, select the action with highest probability
+                          If False, sample from the probability distribution
+                          
+        Returns:
+            action: Selected action
+        """
+        state = torch.FloatTensor(state).unsqueeze(0)
+        policy, _ = self.forward(state)
+        
+        if deterministic:
+            action = torch.argmax(policy).item()
+        else:
+            m = Categorical(policy)
+            action = m.sample().item()
+            
+        return action
+</file>
+
+<file path="environment/__init__.py">
+from environment.grid_world import MultiAgentGridWorld
+
+__all__ = ['MultiAgentGridWorld']
+</file>
+
+<file path="environment/grid_world.py">
+import numpy as np
+import matplotlib.pyplot as plt
+import gymnasium as gym
+from gymnasium.spaces import Discrete, Box
+
+class MultiAgentGridWorld(gym.Env):
+    """
+    A multi-agent grid world environment where agents can either compete or cooperate.
+    
+    Environment features:
+    - Multiple agents navigate a grid
+    - Resources scattered around that agents can collect
+    - Agents can choose to share resources (cooperate) or steal from others (compete)
+    - Rewards based on resource collection and agent interactions
+    """
+    
+    def __init__(self, grid_size=10, num_agents=3, num_resources=15, max_steps=100, coop_factor=0.3):
+        super(MultiAgentGridWorld, self).__init__()
+        
+        self.grid_size = grid_size
+        self.num_agents = num_agents
+        self.num_resources = num_resources
+        self.max_steps = max_steps
+        self.coop_factor = coop_factor  # Determines reward for cooperation
+        
+        # Define action and observation spaces
+        # Actions: 0=up, 1=right, 2=down, 3=left, 4=share, 5=steal
+        self.action_space = [Discrete(6) for _ in range(num_agents)]
+        
+        # Observation: agent sees a 5x5 grid around itself (25 cells) + positions of other agents (2*num_agents)
+        # + own resource count (1) + other agents' resource counts (num_agents-1)
+        obs_size = 25 + 2*num_agents + num_agents
+        self.observation_space = [Box(low=0, high=1, shape=(obs_size,), dtype=np.float32) 
+                                 for _ in range(num_agents)]
+        
+        # Initialize grid, agent positions, and resources
+        self.grid = np.zeros((grid_size, grid_size))
+        self.agent_positions = []
+        self.agent_resources = np.zeros(num_agents)
+        self.resource_positions = []
+        self.current_step = 0
+        
+    def reset(self, seed=None, options=None):
+        """Reset the environment for a new episode."""
+        if seed is not None:
+            np.random.seed(seed)
+            
+        self.grid = np.zeros((self.grid_size, self.grid_size))
+        self.agent_positions = []
+        self.agent_resources = np.zeros(self.num_agents)
+        self.resource_positions = []
+        self.current_step = 0
+        
+        # Place agents randomly on the grid
+        positions = set()
+        for _ in range(self.num_agents):
+            while True:
+                pos = (np.random.randint(0, self.grid_size), np.random.randint(0, self.grid_size))
+                if pos not in positions:
+                    self.agent_positions.append(pos)
+                    positions.add(pos)
+                    self.grid[pos] = 1  # Mark agent position on grid
+                    break
+        
+        # Place resources randomly on the grid
+        for _ in range(self.num_resources):
+            while True:
+                pos = (np.random.randint(0, self.grid_size), np.random.randint(0, self.grid_size))
+                if pos not in positions:
+                    self.resource_positions.append(pos)
+                    positions.add(pos)
+                    self.grid[pos] = 2  # Mark resource position on grid
+                    break
+        
+        observations = self._get_observations()
+        return observations, {}
+    
+    def step(self, actions):
+        """
+        Process one step in the environment.
+        
+        Args:
+            actions: List of actions for each agent
+            
+        Returns:
+            observations, rewards, dones, truncated, info
+        """
+        self.current_step += 1
+        rewards = np.zeros(self.num_agents)
+        
+        # Process movement actions first
+        new_positions = []
+        for i, action in enumerate(actions):
+            pos = self.agent_positions[i]
+            
+            # Handle movement (0=up, 1=right, 2=down, 3=left)
+            if action < 4:
+                new_pos = list(pos)
+                if action == 0 and pos[0] > 0:
+                    new_pos[0] -= 1
+                elif action == 1 and pos[1] < self.grid_size - 1:
+                    new_pos[1] += 1
+                elif action == 2 and pos[0] < self.grid_size - 1:
+                    new_pos[0] += 1
+                elif action == 3 and pos[1] > 0:
+                    new_pos[1] -= 1
+                
+                new_positions.append(tuple(new_pos))
+            else:
+                new_positions.append(pos)
+        
+        # Update grid with new positions
+        self.grid = np.zeros((self.grid_size, self.grid_size))
+        for pos in self.resource_positions:
+            self.grid[pos] = 2
+            
+        # Check for resource collection
+        for i, pos in enumerate(new_positions):
+            for j, res_pos in enumerate(self.resource_positions):
+                if pos == res_pos:
+                    self.agent_resources[i] += 1
+                    rewards[i] += 1
+                    self.resource_positions.pop(j)
+                    break
+        
+        # Process social actions (4=share, 5=steal)
+        for i, action in enumerate(actions):
+            if action == 4:  # Share
+                # Find nearby agents
+                nearby_agents = []
+                for j, pos in enumerate(new_positions):
+                    if i != j and self._is_nearby(new_positions[i], pos):
+                        nearby_agents.append(j)
+                
+                if nearby_agents and self.agent_resources[i] > 0:
+                    share_amount = min(1, self.agent_resources[i])
+                    self.agent_resources[i] -= share_amount
+                    
+                    # Distribute evenly among nearby agents
+                    for j in nearby_agents:
+                        self.agent_resources[j] += share_amount / len(nearby_agents)
+                        rewards[j] += share_amount / len(nearby_agents)
+                    
+                    # Cooperative bonus
+                    coop_reward = self.coop_factor * share_amount
+                    rewards[i] += coop_reward
+            
+            elif action == 5:  # Steal
+                # Find nearby agents
+                for j, pos in enumerate(new_positions):
+                    if i != j and self._is_nearby(new_positions[i], pos):
+                        if self.agent_resources[j] > 0:
+                            steal_amount = min(0.5, self.agent_resources[j])
+                            self.agent_resources[j] -= steal_amount
+                            self.agent_resources[i] += steal_amount
+                            rewards[i] += steal_amount
+                            rewards[j] -= steal_amount * 2  # Penalty for being stolen from
+        
+        # Update agent positions
+        self.agent_positions = new_positions
+        for pos in self.agent_positions:
+            self.grid[pos] = 1
+        
+        # Check if episode is done
+        dones = [False] * self.num_agents
+        truncated = [False] * self.num_agents
+        
+        if not self.resource_positions or self.current_step >= self.max_steps:
+            dones = [True] * self.num_agents
+            truncated = [True] * self.num_agents
+        
+        observations = self._get_observations()
+        
+        info = {
+            'agent_resources': self.agent_resources,
+            'remaining_resources': len(self.resource_positions)
+        }
+        
+        return observations, rewards, dones, truncated, info
+    
+    def _get_observations(self):
+        """Return observations for all agents."""
+        observations = []
+        
+        for i, pos in enumerate(self.agent_positions):
+            # Get 5x5 grid around agent
+            local_view = np.zeros((5, 5))
+            for dx in range(-2, 3):
+                for dy in range(-2, 3):
+                    x, y = pos[0] + dx, pos[1] + dy
+                    if 0 <= x < self.grid_size and 0 <= y < self.grid_size:
+                        local_view[dx+2, dy+2] = self.grid[x, y]
+            
+            # Flatten grid view
+            grid_obs = local_view.flatten()
+            
+            # Add positions of all agents relative to this agent
+            agent_pos_obs = []
+            for other_pos in self.agent_positions:
+                rel_x = (other_pos[0] - pos[0]) / self.grid_size
+                rel_y = (other_pos[1] - pos[1]) / self.grid_size
+                agent_pos_obs.extend([rel_x, rel_y])
+            
+            # Add resource information
+            resource_obs = list(self.agent_resources / max(1, self.num_resources))
+            
+            # Combine all observations
+            full_obs = np.concatenate([grid_obs, agent_pos_obs, resource_obs])
+            observations.append(full_obs)
+        
+        return observations
+    
+    def _is_nearby(self, pos1, pos2):
+        """Check if two positions are adjacent to each other."""
+        return abs(pos1[0] - pos2[0]) <= 1 and abs(pos1[1] - pos2[1]) <= 1
+    
+    def render(self):
+        """Render the environment."""
+        grid_display = np.zeros((self.grid_size, self.grid_size, 3))
+        
+        # Draw resources
+        for pos in self.resource_positions:
+            grid_display[pos] = [0.0, 1.0, 0.0]  # Green for resources
+        
+        # Draw agents with different colors
+        colors = [
+            [1.0, 0.0, 0.0],  # Red
+            [0.0, 0.0, 1.0],  # Blue
+            [1.0, 1.0, 0.0],  # Yellow
+            [1.0, 0.0, 1.0],  # Magenta
+            [0.0, 1.0, 1.0],  # Cyan
+        ]
+        
+        for i, pos in enumerate(self.agent_positions):
+            grid_display[pos] = colors[i % len(colors)]
+        
+        plt.figure(figsize=(8, 8))
+        plt.imshow(grid_display)
+        plt.grid(which='major', axis='both', linestyle='-', color='k', linewidth=2)
+        plt.xticks(np.arange(-.5, self.grid_size, 1), [])
+        plt.yticks(np.arange(-.5, self.grid_size, 1), [])
+        
+        # Display resource counts
+        for i, res in enumerate(self.agent_resources):
+            plt.text(0, i, f"Agent {i} resources: {res:.1f}", fontsize=12)
+        
+        plt.show()
+</file>
+
+<file path="training/__init__.py">
+from training.trainer import MultiAgentTrainer
+
+__all__ = ['MultiAgentTrainer']
+</file>
+
+<file path="training/trainer.py">
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+
+class MultiAgentTrainer:
+    """
+    Framework for training multiple agents in a shared environment.
+    """
+    def __init__(self, env, agents, max_episodes=1000, max_steps=100, update_interval=128, 
+                 log_interval=10, save_interval=100, eval_interval=20, save_dir='saved_models'):
+        """
+        Initialize the trainer.
+        
+        Args:
+            env: Multi-agent environment
+            agents: List of agent objects
+            max_episodes: Maximum number of episodes to train
+            max_steps: Maximum steps per episode
+            update_interval: Frequency of policy updates (in steps)
+            log_interval: Frequency of logging (in episodes)
+            save_interval: Frequency of model saving (in episodes)
+            eval_interval: Frequency of evaluation (in episodes)
+            save_dir: Directory to save trained models
+        """
+        self.env = env
+        self.agents = agents
+        self.max_episodes = max_episodes
+        self.max_steps = max_steps
+        self.update_interval = update_interval
+        self.log_interval = log_interval
+        self.save_interval = save_interval
+        self.eval_interval = eval_interval
+        self.save_dir = save_dir
+        
+        self.num_agents = len(agents)
+        self.step_counter = 0
+        
+        # Ensure save directory exists
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # Metrics for logging
+        self.episode_rewards = [[] for _ in range(self.num_agents)]
+        self.resource_counts = [[] for _ in range(self.num_agents)]
+        self.cooperation_counts = [0] * self.num_agents
+        self.theft_counts = [0] * self.num_agents
+        
+    def train(self):
+        """
+        Main training loop.
+        
+        Returns:
+            episode_rewards: List of rewards for each agent across episodes
+            resource_counts: List of resources collected by each agent across episodes
+        """
+        for episode in range(1, self.max_episodes + 1):
+            observations, _ = self.env.reset()
+            episode_rewards = np.zeros(self.num_agents)
+            
+            for step in range(self.max_steps):
+                actions = []
+                
+                # Select actions for each agent
+                for i, agent in enumerate(self.agents):
+                    action = agent.select_action(observations[i])
+                    actions.append(action)
+                    
+                    # Track social actions
+                    if action == 4:  # Share
+                        self.cooperation_counts[i] += 1
+                    elif action == 5:  # Steal
+                        self.theft_counts[i] += 1
+                
+                # Execute actions in the environment
+                next_observations, rewards, dones, truncated, info = self.env.step(actions)
+                
+                # Store transitions for each agent
+                for i, agent in enumerate(self.agents):
+                    agent.store_transition(observations[i], actions[i], rewards[i], 
+                                          next_observations[i], dones[i])
+                    episode_rewards[i] += rewards[i]
+                
+                observations = next_observations
+                self.step_counter += 1
+                
+                # Check if it's time to update
+                if self.step_counter % self.update_interval == 0:
+                    for i, agent in enumerate(self.agents):
+                        agent.update()
+                
+                # Check if episode is done
+                if all(dones):
+                    break
+            
+            for i in range(self.num_agents):
+                self.episode_rewards[i].append(episode_rewards[i])
+                self.resource_counts[i].append(self.env.agent_resources[i])
+            
+            if episode % self.log_interval == 0:
+                avg_rewards = [np.mean(rewards[-self.log_interval:]) for rewards in self.episode_rewards]
+                avg_resources = [np.mean(resources[-self.log_interval:]) for resources in self.resource_counts]
+                
+                print(f"Episode {episode}/{self.max_episodes}")
+                print(f"Average Rewards: {avg_rewards}")
+                print(f"Average Resources: {avg_resources}")
+                print(f"Cooperation Actions: {self.cooperation_counts}")
+                print(f"Theft Actions: {self.theft_counts}")
+                print("-" * 50)
+            
+            # Save models
+            if episode % self.save_interval == 0:
+                for i, agent in enumerate(self.agents):
+                    save_path = os.path.join(self.save_dir, f"agent_{i}_episode_{episode}.pth")
+                    agent.save(save_path)
+            
+            # Evaluation
+            if episode % self.eval_interval == 0:
+                self.evaluate(5, render=False)
+                
+        return self.episode_rewards, self.resource_counts
+    
+    def evaluate(self, num_episodes=10, render=True):
+        """
+        Evaluate the current policy.
+        
+        Args:
+            num_episodes: Number of episodes to evaluate
+            render: Whether to render the environment
+            
+        Returns:
+            avg_rewards: Average rewards for each agent
+            avg_resources: Average resources collected by each agent
+        """
+        total_rewards = np.zeros(self.num_agents)
+        total_resources = np.zeros(self.num_agents)
+        
+        for episode in range(num_episodes):
+            observations, _ = self.env.reset()
+            episode_rewards = np.zeros(self.num_agents)
+            done = False
+            
+            while not done:
+                actions = []
+                
+                # Select deterministic actions for evaluation
+                for i, agent in enumerate(self.agents):
+                    action = agent.select_action(observations[i], deterministic=True)
+                    actions.append(action)
+                
+                # Execute actions in the environment
+                next_observations, rewards, dones, truncated, info = self.env.step(actions)
+                
+                for i in range(self.num_agents):
+                    episode_rewards[i] += rewards[i]
+                
+                observations = next_observations
+                
+                if render and episode == 0:
+                    self.env.render()
+                
+                if all(dones):
+                    done = True
+            
+            total_rewards += episode_rewards
+            total_resources += self.env.agent_resources
+        
+        avg_rewards = total_rewards / num_episodes
+        avg_resources = total_resources / num_episodes
+        
+        print("\nEVALUATION")
+        print(f"Average Rewards: {avg_rewards}")
+        print(f"Average Resources: {avg_resources}")
+        print("---\n")
+        
+        return avg_rewards, avg_resources
+    
+    def plot_metrics(self, save_fig=True):
+        """
+        Plot training metrics.
+        
+        Args:
+            save_fig: Whether to save the figure
+        """
+        # Plot rewards
+        plt.figure(figsize=(12, 8))
+        plt.subplot(2, 2, 1)
+        for i in range(self.num_agents):
+            plt.plot(self.episode_rewards[i], label=f"Agent {i}")
+        plt.title("Episode Rewards")
+        plt.xlabel("Episode")
+        plt.ylabel("Reward")
+        plt.legend()
+        
+        # Plot smoothed rewards
+        plt.subplot(2, 2, 2)
+        window_size = min(10, len(self.episode_rewards[0]))
+        for i in range(self.num_agents):
+            if len(self.episode_rewards[i]) > window_size:
+                smoothed_rewards = np.convolve(self.episode_rewards[i], 
+                                            np.ones(window_size)/window_size, 
+                                            mode='valid')
+                plt.plot(smoothed_rewards, label=f"Agent {i}")
+        plt.title(f"Smoothed Rewards (Window={window_size})")
+        plt.xlabel("Episode")
+        plt.ylabel("Reward")
+        plt.legend()
+        
+        # Plot resources
+        plt.subplot(2, 2, 3)
+        for i in range(self.num_agents):
+            plt.plot(self.resource_counts[i], label=f"Agent {i}")
+        plt.title("Resources Collected")
+        plt.xlabel("Episode")
+        plt.ylabel("Resources")
+        plt.legend()
+        
+        # Plot social actions
+        plt.subplot(2, 2, 4)
+        agents = range(self.num_agents)
+        width = 0.35
+        plt.bar(agents, self.cooperation_counts, width, label='Cooperation')
+        plt.bar([p + width for p in agents], self.theft_counts, width, label='Theft')
+        plt.title("Social Actions")
+        plt.xlabel("Agent")
+        plt.ylabel("Count")
+        plt.xticks([p + width/2 for p in agents], [f"Agent {i}" for i in agents])
+        plt.legend()
+        
+        plt.tight_layout()
+        
+        if save_fig:
+            plt.savefig(os.path.join(self.save_dir, "training_metrics.png"))
+            
+        plt.show()
+</file>
+
+<file path="utils/visualization.py">
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+from matplotlib.animation import FuncAnimation
+import matplotlib.patches as patches
+
+def plot_training_history(rewards_history, resource_history, save_dir='figures'):
+    """
+    Plot the training history metrics.
+    
+    Args:
+        rewards_history: List of rewards for each agent across episodes
+        resource_history: List of resources collected by each agent across episodes
+        save_dir: Directory to save the figures
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    
+    num_agents = len(rewards_history)
+    
+    # Plot rewards
+    plt.figure(figsize=(10, 6))
+    for i in range(num_agents):
+        plt.plot(rewards_history[i], label=f"Agent {i}")
+    plt.title("Rewards per Episode")
+    plt.xlabel("Episode")
+    plt.ylabel("Total Reward")
+    plt.legend()
+    plt.savefig(os.path.join(save_dir, "rewards.png"))
+    plt.close()
+    
+    # Plot resources
+    plt.figure(figsize=(10, 6))
+    for i in range(num_agents):
+        plt.plot(resource_history[i], label=f"Agent {i}")
+    plt.title("Resources Collected per Episode")
+    plt.xlabel("Episode")
+    plt.ylabel("Resources")
+    plt.legend()
+    plt.savefig(os.path.join(save_dir, "resources.png"))
+    plt.close()
+    
+    # Plot learning curves (moving average)
+    window_size = min(10, len(rewards_history[0]))
+    if len(rewards_history[0]) > window_size:
+        plt.figure(figsize=(10, 6))
+        for i in range(num_agents):
+            smoothed_rewards = np.convolve(rewards_history[i], 
+                                        np.ones(window_size)/window_size, 
+                                        mode='valid')
+            plt.plot(smoothed_rewards, label=f"Agent {i}")
+        plt.title(f"Smoothed Rewards (Window={window_size})")
+        plt.xlabel("Episode")
+        plt.ylabel("Average Reward")
+        plt.legend()
+        plt.savefig(os.path.join(save_dir, "learning_curve.png"))
+        plt.close()
+
+def visualize_episode(env, agents, save_path=None, max_steps=100):
+    """
+    Run and visualize a full episode with the trained agents.
+    
+    Args:
+        env: Environment
+        agents: List of trained agents
+        save_path: Path to save the animation (optional)
+        max_steps: Maximum steps per episode
+    """
+    observations, _ = env.reset()
+    done = False
+    step = 0
+    
+    # Store episode data for visualization
+    episode_data = []
+    episode_data.append({
+        'grid': env.grid.copy(),
+        'agent_positions': env.agent_positions.copy(),
+        'resource_positions': env.resource_positions.copy(),
+        'agent_resources': env.agent_resources.copy()
+    })
+    
+    while not done and step < max_steps:
+        actions = []
+        for i, agent in enumerate(agents):
+            action = agent.select_action(observations[i], deterministic=True)
+            actions.append(action)
+        
+        next_observations, rewards, dones, truncated, info = env.step(actions)
+        
+        # Store step data
+        episode_data.append({
+            'grid': env.grid.copy(),
+            'agent_positions': env.agent_positions.copy(),
+            'resource_positions': env.resource_positions.copy(),
+            'agent_resources': env.agent_resources.copy(),
+            'actions': actions,
+            'rewards': rewards
+        })
+        
+        observations = next_observations
+        step += 1
+        
+        if all(dones):
+            done = True
+    
+    # Visualize the episode as an animation
+    fig, ax = plt.subplots(figsize=(10, 10))
+    
+    def init():
+        ax.clear()
+        return []
+    
+    def animate(i):
+        ax.clear()
+        data = episode_data[i]
+        
+        # Create grid
+        grid_size = env.grid_size
+        ax.set_xlim(-0.5, grid_size - 0.5)
+        ax.set_ylim(-0.5, grid_size - 0.5)
+        
+        # Draw grid lines
+        for x in range(grid_size):
+            ax.axvline(x - 0.5, color='black', linewidth=1)
+        for y in range(grid_size):
+            ax.axhline(y - 0.5, color='black', linewidth=1)
+            
+        # Draw resources
+        for pos in data['resource_positions']:
+            rect = patches.Rectangle((pos[1] - 0.5, pos[0] - 0.5), 1, 1, 
+                                    linewidth=1, edgecolor='none', facecolor='green', alpha=0.5)
+            ax.add_patch(rect)
+            
+        # Draw agents
+        colors = ['red', 'blue', 'yellow', 'magenta', 'cyan']
+        for j, pos in enumerate(data['agent_positions']):
+            circle = plt.Circle((pos[1], pos[0]), 0.4, color=colors[j % len(colors)])
+            ax.add_patch(circle)
+            ax.text(pos[1], pos[0], str(j), ha='center', va='center', color='white')
+            
+        # Add step information
+        if i > 0:
+            actions_map = {0: '↑', 1: '→', 2: '↓', 3: '←', 4: 'Share', 5: 'Steal'}
+            action_text = [f"Agent {j}: {actions_map[act]}" for j, act in enumerate(data['actions'])]
+            reward_text = [f"Reward {j}: {r:.2f}" for j, r in enumerate(data['rewards'])]
+            
+            ax.set_title(f"Step {i}\n" + "\n".join(action_text) + "\n" + "\n".join(reward_text))
+        else:
+            ax.set_title("Initial State")
+            
+        # Add resource counts
+        for j, res in enumerate(data['agent_resources']):
+            ax.text(grid_size * 0.8, grid_size - 1 - j, f"Agent {j}: {res:.1f} resources", 
+                   fontsize=10, bbox=dict(facecolor=colors[j % len(colors)], alpha=0.3))
+                   
+        return []
+    
+    ani = FuncAnimation(fig, animate, frames=len(episode_data), init_func=init, blit=True, interval=500)
+    
+    if save_path:
+        ani.save(save_path, writer='pillow', fps=2)
+    
+    plt.tight_layout()
+    plt.show()
+    
+    return episode_data
+</file>
+
+<file path="config.py">
+"""
+Configuration settings for the multi-agent reinforcement learning project.
+"""
+
+# Random seed for reproducibility
+RANDOM_SEED = 42
+
+# Environment settings
+ENV_CONFIG = {
+    'grid_size': 10,
+    'num_agents': 3,
+    'num_resources': 15,
+    'max_steps': 100,
+    'coop_factor': 0.3,  # Reward bonus for cooperation
+}
+
+# Agent settings
+AGENT_CONFIG = {
+    'hidden_size': 128,
+    'lr': 0.001,
+    'gamma': 0.99,
+    'epsilon_clip': 0.2,
+    'value_coef': 0.5,
+    'entropy_coef': 0.01,
+    'update_steps': 4,
+    'batch_size': 32,
+}
+
+# Training settings
+TRAIN_CONFIG = {
+    'max_episodes': 500,
+    'update_interval': 128,
+    'log_interval': 10,
+    'save_interval': 100,
+    'eval_interval': 20,
+    'save_dir': 'saved_models',
+}
+
+# Evaluation settings
+EVAL_CONFIG = {
+    'num_episodes': 10,
+    'render': True,
+    'save_video': True,
+    'video_dir': 'videos',
+}
+
+# Visualization settings
+VIZ_CONFIG = {
+    'fig_size': (12, 8),
+    'save_dir': 'figures',
+}
+</file>
+
+<file path="main.py">
+"""
+Main script to run the multi-agent reinforcement learning project.
+"""
+
+import os
+import torch
+import numpy as np
+import random
+import argparse
+
+from environment import MultiAgentGridWorld
+from agents import PPOAgent
+from training import MultiAgentTrainer
+from utils import visualize_episode
+from config import (
+    RANDOM_SEED, ENV_CONFIG, AGENT_CONFIG, 
+    TRAIN_CONFIG, EVAL_CONFIG, VIZ_CONFIG
+)
+
+def set_random_seeds(seed):
+    """Set random seeds for reproducibility."""
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    # Set torch to deterministic mode if available
+    if hasattr(torch, 'set_deterministic'):
+        torch.set_deterministic(True)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+def create_environment():
+    """Create the multi-agent environment."""
+    return MultiAgentGridWorld(
+        grid_size=ENV_CONFIG['grid_size'],
+        num_agents=ENV_CONFIG['num_agents'],
+        num_resources=ENV_CONFIG['num_resources'],
+        max_steps=ENV_CONFIG['max_steps'],
+        coop_factor=ENV_CONFIG['coop_factor']
+    )
+
+def create_agents(env):
+    """Create agents for the environment."""
+    agents = []
+    for i in range(env.num_agents):
+        state_size = env.observation_space[i].shape[0]
+        action_size = env.action_space[i].n
+        
+        agent = PPOAgent(
+            state_size=state_size, 
+            action_size=action_size,
+            hidden_size=AGENT_CONFIG['hidden_size'],
+            lr=AGENT_CONFIG['lr'],
+            gamma=AGENT_CONFIG['gamma'],
+            epsilon_clip=AGENT_CONFIG['epsilon_clip'],
+            value_coef=AGENT_CONFIG['value_coef'],
+            entropy_coef=AGENT_CONFIG['entropy_coef'],
+            agent_id=i,
+            update_steps=AGENT_CONFIG['update_steps'],
+            batch_size=AGENT_CONFIG['batch_size']
+        )
+        agents.append(agent)
+    
+    return agents
+
+def train(env, agents):
+    """Train the agents in the environment."""
+    trainer = MultiAgentTrainer(
+        env=env,
+        agents=agents,
+        max_episodes=TRAIN_CONFIG['max_episodes'],
+        max_steps=ENV_CONFIG['max_steps'],
+        update_interval=TRAIN_CONFIG['update_interval'],
+        log_interval=TRAIN_CONFIG['log_interval'],
+        save_interval=TRAIN_CONFIG['save_interval'],
+        eval_interval=TRAIN_CONFIG['eval_interval'],
+        save_dir=TRAIN_CONFIG['save_dir']
+    )
+    
+    rewards_history, resource_history = trainer.train()
+    
+    # Plot final metrics
+    trainer.plot_metrics(save_fig=True)
+    
+    return trainer
+
+def evaluate(env, agents):
+    """Evaluate the trained agents."""
+    # Create directories if they don't exist
+    os.makedirs(EVAL_CONFIG['video_dir'], exist_ok=True)
+    
+    # Run evaluation episodes
+    for episode in range(EVAL_CONFIG['num_episodes']):
+        print(f"\nEvaluation Episode {episode+1}/{EVAL_CONFIG['num_episodes']}")
+        
+        save_path = None
+        if EVAL_CONFIG['save_video']:
+            save_path = os.path.join(EVAL_CONFIG['video_dir'], f"episode_{episode}.gif")
+            
+        episode_data = visualize_episode(
+            env=env,
+            agents=agents,
+            save_path=save_path,
+            max_steps=ENV_CONFIG['max_steps']
+        )
+        
+        # Print episode summary
+        final_data = episode_data[-1]
+        print("Final resources:", final_data['agent_resources'])
+        print("Total steps:", len(episode_data) - 1)  # Subtract initial state
+
+def main():
+    """Main function to run the project."""
+    parser = argparse.ArgumentParser(description='Multi-Agent Reinforcement Learning')
+    parser.add_argument('--train', action='store_true', help='Train the agents')
+    parser.add_argument('--evaluate', action='store_true', help='Evaluate the agents')
+    parser.add_argument('--load_dir', type=str, default=None, help='Directory to load trained models')
+    parser.add_argument('--episodes', type=int, default=None, help='Number of episodes for training')
+    
+    args = parser.parse_args()
+    
+    # Set random seeds
+    set_random_seeds(RANDOM_SEED)
+    
+    # Create environment and agents
+    env = create_environment()
+    agents = create_agents(env)
+    
+    # Load trained models if specified
+    if args.load_dir:
+        for i, agent in enumerate(agents):
+            # Find the latest model for each agent
+            model_files = [f for f in os.listdir(args.load_dir) if f.startswith(f"agent_{i}_")]
+            if model_files:
+                latest_model = sorted(model_files, key=lambda x: int(x.split('_')[-1].split('.')[0]))[-1]
+                model_path = os.path.join(args.load_dir, latest_model)
+                print(f"Loading agent {i} model from {model_path}")
+                agent.load(model_path)
+    
+    # Update episodes if specified
+    if args.episodes:
+        TRAIN_CONFIG['max_episodes'] = args.episodes
+    
+    # Train or evaluate based on arguments
+    if args.train:
+        print("Starting training...")
+        trainer = train(env, agents)
+        print("Training completed!")
+    
+    if args.evaluate:
+        print("Starting evaluation...")
+        evaluate(env, agents)
+        print("Evaluation completed!")
+    
+    # If no mode specified, run both
+    if not args.train and not args.evaluate:
+        print("Starting training and evaluation...")
+        trainer = train(env, agents)
+        evaluate(env, agents)
+        print("All tasks completed!")
+
+if __name__ == "__main__":
+    main()
+</file>
+
+<file path="README.md">
+# marl
+Repo to practice implementing MARL systems.
+</file>
+
+<file path="agents/ppo_agent.py">
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+from torch.distributions import Categorical
+import numpy as np
+
+from agents.networks import ActorCriticNetwork
+
+class PPOAgent:
+    """
+    Agent implementation using Proximal Policy Optimization (PPO) algorithm.
+    """
+    def __init__(self, state_size, action_size, hidden_size=128, lr=0.001, gamma=0.99, 
+                 epsilon_clip=0.2, value_coef=0.5, entropy_coef=0.01, agent_id=0,
+                 update_steps=4, batch_size=32):
+        """
+        Initialize a PPO agent.
+        
+        Args:
+            state_size: Dimension of the observation space
+            action_size: Dimension of the action space
+            hidden_size: Number of neurons in hidden layers
+            lr: Learning rate
+            gamma: Discount factor
+            epsilon_clip: PPO clipping parameter
+            value_coef: Value loss coefficient
+            entropy_coef: Entropy bonus coefficient
+            agent_id: Identifier for the agent
+            update_steps: Number of epochs to update policy
+            batch_size: Mini-batch size for updates
+        """
+        self.state_size = state_size
+        self.action_size = action_size
+        self.gamma = gamma
+        self.epsilon_clip = epsilon_clip
+        self.value_coef = value_coef
+        self.entropy_coef = entropy_coef
+        self.agent_id = agent_id
+        self.update_steps = update_steps
+        self.batch_size = batch_size
+        
+        # Policy network
+        self.policy = ActorCriticNetwork(state_size, action_size, hidden_size)
+        self.optimizer = optim.Adam(self.policy.parameters(), lr=lr)
+        
+        # Old policy for PPO update
+        self.old_policy = ActorCriticNetwork(state_size, action_size, hidden_size)
+        self.old_policy.load_state_dict(self.policy.state_dict())
+        
+        # Memory for storing trajectories
+        self.states = []
+        self.actions = []
+        self.rewards = []
+        self.next_states = []
+        self.dones = []
+        self.log_probs = []
+        
+    def select_action(self, state, deterministic=False):
+        """
+        Select an action based on the current policy.
+        
+        Args:
+            state: Current state
+            deterministic: Whether to select actions deterministically
+            
+        Returns:
+            action: Selected action
+        """
+        with torch.no_grad():
+            state_tensor = torch.FloatTensor(state).unsqueeze(0)
+            action_probs, _ = self.old_policy(state_tensor)
+            
+            if deterministic:
+                action = torch.argmax(action_probs).item()
+            else:
+                dist = Categorical(action_probs)
+                action = dist.sample().item()
+                log_prob = dist.log_prob(torch.tensor(action))
+                self.log_probs.append(log_prob.item())
+                
+        return action
+    
+    def store_transition(self, state, action, reward, next_state, done):
+        """
+        Store a transition in the agent's memory.
+        
+        Args:
+            state: Current state
+            action: Action taken
+            reward: Reward received
+            next_state: Next state
+            done: Whether the episode is done
+        """
+        self.states.append(state)
+        self.actions.append(action)
+        self.rewards.append(reward)
+        self.next_states.append(next_state)
+        self.dones.append(done)
+    
+    def update(self):
+        """
+        Update the policy using the PPO algorithm.
+        
+        Returns:
+            loss: Average loss value during the update
+        """
+        # If not enough data, skip update
+        if len(self.states) < self.batch_size:
+            return 0.0
+            
+        # Convert lists to tensors
+        states = torch.FloatTensor(self.states)
+        actions = torch.LongTensor(self.actions)
+        rewards = torch.FloatTensor(self.rewards)
+        next_states = torch.FloatTensor(self.next_states)
+        dones = torch.FloatTensor(self.dones)
+        old_log_probs = torch.FloatTensor(self.log_probs)
+        
+        # Compute returns and advantages
+        returns = []
+        advantages = []
+        value = 0
+        
+        with torch.no_grad():
+            for i in reversed(range(len(self.states))):
+                if dones[i]:
+                    value = 0
+                
+                _, next_value = self.old_policy(next_states[i].unsqueeze(0))
+                _, curr_value = self.old_policy(states[i].unsqueeze(0))
+                
+                # TD error as advantage
+                advantage = rewards[i] + self.gamma * next_value * (1 - dones[i]) - curr_value
+                value = rewards[i] + self.gamma * value * (1 - dones[i])
+                
+                returns.insert(0, value.item())
+                advantages.insert(0, advantage.item())
+                
+        returns = torch.FloatTensor(returns)
+        advantages = torch.FloatTensor(advantages)
+        
+        # Normalize advantages
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        
+        # PPO update for multiple epochs
+        total_loss = 0
+        
+        for _ in range(self.update_steps):
+            # Generate random mini-batches
+            indices = torch.randperm(len(states))[:self.batch_size]
+            
+            batch_states = states[indices]
+            batch_actions = actions[indices]
+            batch_advantages = advantages[indices]
+            batch_returns = returns[indices]
+            batch_old_log_probs = old_log_probs[indices]
+            
+            # Get current policy and values
+            action_probs, values = self.policy(batch_states)
+            dist = Categorical(action_probs)
+            log_probs = dist.log_prob(batch_actions)
+            entropy = dist.entropy().mean()
+            
+            # Compute PPO loss
+            ratio = torch.exp(log_probs - batch_old_log_probs)
+            surr1 = ratio * batch_advantages
+            surr2 = torch.clamp(ratio, 1.0 - self.epsilon_clip, 1.0 + self.epsilon_clip) * batch_advantages
+            
+            actor_loss = -torch.min(surr1, surr2).mean()
+            critic_loss = F.mse_loss(values.squeeze(), batch_returns)
+            
+            # Total loss
+            loss = actor_loss + self.value_coef * critic_loss - self.entropy_coef * entropy
+            
+            # Update policy
+            self.optimizer.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(self.policy.parameters(), 0.5)
+            self.optimizer.step()
+            
+            total_loss += loss.item()
+            
+        self.old_policy.load_state_dict(self.policy.state_dict())
+        
+        # Clear memory
+        self.states = []
+        self.actions = []
+        self.rewards = []
+        self.next_states = []
+        self.dones = []
+        self.log_probs = []
+        
+        return total_loss / self.update_steps
+
+    def save(self, filename):
+        torch.save(self.policy.state_dict(), filename)
+        
+    def load(self, filename):
+        self.policy.load_state_dict(torch.load(filename))
+        self.old_policy.load_state_dict(torch.load(filename))
+</file>
+
+<file path="utils/__init__.py">
+from utils.visualization import plot_training_history, visualize_episode
+
+__all__ = ['plot_training_history', 'visualize_episode']
+</file>
+
+<file path=".gitignore">
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+#   For a library or package, you might want to ignore these files since the code is
+#   intended to run in multiple environments; otherwise, check them in:
+# .python-version
+
+# pipenv
+#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
+#   However, in case of collaboration, if having platform-specific dependencies or dependencies
+#   having no cross-platform support, pipenv may install dependencies that don't work, or not
+#   install all needed dependencies.
+#Pipfile.lock
+
+# UV
+#   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
+#   This is especially recommended for binary packages to ensure reproducibility, and is more
+#   commonly ignored for libraries.
+#uv.lock
+
+# poetry
+#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
+#   This is especially recommended for binary packages to ensure reproducibility, and is more
+#   commonly ignored for libraries.
+#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
+#poetry.lock
+
+# pdm
+#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
+#pdm.lock
+#   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
+#   in version control.
+#   https://pdm.fming.dev/latest/usage/project/#working-with-version-control
+.pdm.toml
+.pdm-python
+.pdm-build/
+
+# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# PyCharm
+#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
+#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
+#  and can be added to the global gitignore or merged into this file.  For a more nuclear
+#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
+#.idea/
+
+# Ruff stuff:
+.ruff_cache/
+
+# PyPI configuration file
+.pypirc
+
+saved_models/
+videos/
+</file>
+
+</files>
